@@ -14,6 +14,9 @@ from PyQt5.QtWidgets import (
 from PyQt5.QtCore import Qt, QSettings, pyqtSlot, QSize, QTimer, QTime
 from PyQt5.QtGui import QIcon
 from .panels.simple_chart_panel import SimpleChartPanel
+from .panels.favorites_panel_fixed import FavoritesPanel
+from .panels.hoga_panel import HogaPanel
+from .loading_dialog import LoadingDialog
 
 logger = logging.getLogger(__name__)
 
@@ -151,43 +154,131 @@ class MainWindow(QMainWindow):
         Args:
             kiwoom: 키움 API 객체
         """
-        super().__init__()
-        self.kiwoom = kiwoom
-        
-        # 설정 로드
-        self.settings = QSettings('MyCompany', 'MyTrader')
-        
-        # 대시보드 관련 변수
-        self.current_dashboard = "기본 대시보드"
-        self.dashboards = {}
-        
-        # 패널 저장 변수
-        self.panels = {}
-        
-        # 열린 패널 콤보박스 초기화
-        self.open_panels_combo = None
-        
         try:
+            super().__init__()
+            self.kiwoom = kiwoom
+            
+            # 설정 로드
+            self.settings = QSettings('MyCompany', 'MyTrader')
+            
+            # 패널 저장 변수 초기화
+            self.panels = {}
+            
+            # UI 초기화
+            self.init_ui()
+            
             # 메뉴바 생성
             self.create_menu_bar()
             
             # 툴바 생성
             self.create_toolbar()
             
-            # UI 초기화
-            self.init_ui()
+            # 기본 패널 생성
+            self.create_default_panels()
             
-            # 대시보드 로드
-            self.load_dashboards()
+            # 대시보드 초기화
+            self.current_dashboard = "기본 대시보드"
+            self.dashboards = {}
+            self.init_dashboards()
             
-            # 로그인 확인
-            if self.kiwoom:
-                self.check_login()
+            # 윈도우 상태 복원
+            geometry = self.settings.value('window/geometry')
+            if geometry:
+                self.restoreGeometry(geometry)
+            
+            state = self.settings.value('window/state')
+            if state:
+                self.restoreState(state)
+            
+            # 메뉴바와 툴바 표시
+            self.menuBar().setVisible(True)
+            for toolbar in self.findChildren(QToolBar):
+                toolbar.setVisible(True)
+            
+            # 윈도우 표시
+            self.show()
+            
         except Exception as e:
             logger.error(f"초기화 중 오류 발생: {e}")
             import traceback
             traceback.print_exc()
-        
+
+    def init_dashboards(self):
+        """대시보드 초기화"""
+        try:
+            # 저장된 대시보드 목록 로드
+            dashboard_list = self.settings.value("dashboards/list", [])
+            
+            # 기본 대시보드가 없으면 추가
+            if "기본 대시보드" not in dashboard_list:
+                dashboard_list.append("기본 대시보드")
+                self.settings.setValue("dashboards/list", dashboard_list)
+                self.create_default_dashboard()
+            
+            # 콤보박스에 대시보드 목록 추가
+            self.dashboard_combo.clear()
+            self.dashboard_combo.addItems(dashboard_list)
+            
+            # 마지막 사용 대시보드 또는 기본 대시보드 로드
+            last_dashboard = self.settings.value("dashboards/last", "기본 대시보드")
+            if last_dashboard in dashboard_list:
+                self.dashboard_combo.setCurrentText(last_dashboard)
+                self.load_dashboard(last_dashboard)
+            else:
+                self.dashboard_combo.setCurrentText("기본 대시보드")
+                self.load_dashboard("기본 대시보드")
+            
+            logger.info("대시보드 초기화 완료")
+            
+        except Exception as e:
+            logger.error(f"대시보드 초기화 중 오류 발생: {e}")
+            QMessageBox.warning(self, "오류", f"대시보드 초기화 중 오류가 발생했습니다: {e}")
+
+    def create_default_dashboard(self):
+        """기본 대시보드 생성"""
+        try:
+            # 차트 패널 생성
+            chart_dock = self.add_chart_panel()
+            chart_dock.setGeometry(100, 100, 600, 400)
+            
+            # 관심종목 패널 생성
+            favorites_dock = self.add_favorites_panel()
+            favorites_dock.setGeometry(700, 100, 400, 300)
+            
+            # 현재가 패널 생성
+            current_price_dock = self.add_current_price_panel()
+            current_price_dock.setGeometry(700, 400, 400, 600)
+            
+            # 기본 대시보드 상태 저장
+            panels_state = {
+                'chart': {
+                    'visible': True,
+                    'geometry': chart_dock.geometry().getRect(),
+                    'floating': True,
+                    'area': int(self.dockWidgetArea(chart_dock))
+                },
+                'favorites': {
+                    'visible': True,
+                    'geometry': favorites_dock.geometry().getRect(),
+                    'floating': True,
+                    'area': int(self.dockWidgetArea(favorites_dock))
+                },
+                'current_price': {
+                    'visible': True,
+                    'geometry': current_price_dock.geometry().getRect(),
+                    'floating': True,
+                    'area': int(self.dockWidgetArea(current_price_dock))
+                }
+            }
+            
+            self.settings.setValue("dashboards/기본 대시보드/panels", panels_state)
+            self.settings.setValue("dashboards/기본 대시보드/state", self.saveState())
+            
+            logger.info("기본 대시보드 생성 완료")
+            
+        except Exception as e:
+            logger.error(f"기본 대시보드 생성 중 오류 발생: {e}")
+
     def create_menu_bar(self):
         """메뉴바 생성"""
         menubar = self.menuBar()
@@ -440,33 +531,35 @@ class MainWindow(QMainWindow):
     
     def init_ui(self):
         """UI 초기화"""
-        # 윈도우 설정
-        self.setWindowTitle("트레이딩봇")
-        self.setGeometry(100, 100, 1512, 900)
-        
-        # 중앙 위젯
-        self.central_widget = QTabWidget()
-        self.setCentralWidget(self.central_widget)
-        
-        # 상태바
-        self.statusBar().showMessage("준비됨")
-        
-        # 도킹 가능하도록 설정
-        self.setDockNestingEnabled(True)
-        self.setCorner(Qt.TopLeftCorner, Qt.LeftDockWidgetArea)
-        self.setCorner(Qt.TopRightCorner, Qt.RightDockWidgetArea)
-        self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
-        self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
-        
-        # 도킹 힌트 비활성화 (자유로운 배치를 위해)
-        self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
-        
-        # 차트 패널 추가 (샘플)
-        chart_dock = self.add_chart_panel()
-        
-        # 열린 패널 목록 업데이트
-        self.update_open_panels()
-    
+        try:
+            # 윈도우 설정
+            self.setWindowTitle("트레이딩봇")
+            self.setGeometry(100, 100, 1512, 900)
+            
+            # 중앙 위젯
+            self.central_widget = QWidget()
+            self.setCentralWidget(self.central_widget)
+            
+            # 상태바
+            self.statusBar().showMessage("준비됨")
+            self.statusBar().setVisible(True)
+            
+            # 도킹 가능하도록 설정
+            self.setDockNestingEnabled(True)
+            self.setCorner(Qt.TopLeftCorner, Qt.LeftDockWidgetArea)
+            self.setCorner(Qt.TopRightCorner, Qt.RightDockWidgetArea)
+            self.setCorner(Qt.BottomLeftCorner, Qt.LeftDockWidgetArea)
+            self.setCorner(Qt.BottomRightCorner, Qt.RightDockWidgetArea)
+            
+            # 도킹 힌트 비활성화 (자유로운 배치를 위해)
+            self.setDockOptions(QMainWindow.AnimatedDocks | QMainWindow.AllowNestedDocks | QMainWindow.AllowTabbedDocks)
+            
+            logger.info("UI 초기화 완료")
+            
+        except Exception as e:
+            logger.error(f"UI 초기화 중 오류 발생: {e}")
+            raise
+
     def add_chart_panel(self):
         """차트 패널 추가 (샘플)"""
         # 차트 패널 생성
@@ -500,6 +593,92 @@ class MainWindow(QMainWindow):
         
         return chart_dock
     
+    def add_favorites_panel(self):
+        """관심종목 패널 추가"""
+        # 관심종목 패널 생성
+        favorites_panel = FavoritesPanel(self, self.kiwoom)
+        
+        # 패널 크기 정책 설정
+        favorites_panel.setMinimumSize(400, 300)
+        
+        # 도킹 위젯으로 추가
+        dock = QDockWidget("관심종목", self)
+        dock.setObjectName("favorites_dock")
+        dock.setWidget(favorites_panel)
+        
+        # 도킹 설정
+        dock.setAllowedAreas(Qt.NoDockWidgetArea)  # 도킹 영역 제한
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+        dock.setFloating(True)  # 부유 상태로 시작
+        
+        # 도킹 위젯 추가
+        self.addDockWidget(Qt.LeftDockWidgetArea, dock)
+        
+        # 차트 요청 시그널 연결
+        favorites_panel.chart_requested.connect(self._on_chart_requested)
+        
+        # 패널 저장
+        self.panels["favorites"] = dock
+        
+        # 열린 패널 목록 업데이트
+        self.update_open_panels()
+        
+        return dock
+    
+    def add_current_price_panel(self):
+        """현재가 패널 추가"""
+        # 현재가 패널 생성
+        current_price_panel = HogaPanel(self, self.kiwoom)
+        
+        # 패널 크기 정책 설정
+        current_price_panel.setMinimumSize(400, 600)
+        
+        # 도킹 위젯으로 추가
+        dock = QDockWidget("현재가", self)
+        dock.setObjectName("current_price_dock")
+        dock.setWidget(current_price_panel)
+        
+        # 도킹 설정
+        dock.setAllowedAreas(Qt.NoDockWidgetArea)  # 도킹 영역 제한
+        dock.setFeatures(QDockWidget.DockWidgetMovable | QDockWidget.DockWidgetFloatable | QDockWidget.DockWidgetClosable)
+        dock.setFloating(True)  # 부유 상태로 시작
+        
+        # 도킹 위젯 추가
+        self.addDockWidget(Qt.RightDockWidgetArea, dock)
+        
+        # 차트 요청 시그널 연결
+        current_price_panel.chart_requested.connect(self._on_chart_requested)
+        
+        # 패널 저장
+        self.panels["current_price"] = dock
+        
+        # 열린 패널 목록 업데이트
+        self.update_open_panels()
+        
+        return dock
+    
+    def _on_chart_requested(self, code):
+        """차트 요청 처리"""
+        try:
+            # 차트 패널이 없으면 생성
+            if "chart" not in self.panels:
+                chart_dock = self.add_chart_panel()
+            else:
+                chart_dock = self.panels["chart"]
+                chart_dock.show()
+                chart_dock.raise_()
+            
+            # 차트 패널에 종목 설정
+            chart_panel = chart_dock.widget()
+            name = self.kiwoom.get_master_code_name(code)
+            chart_panel.set_stock(code, name)
+            
+            logger.info(f"차트 요청 처리: {name}({code})")
+            
+        except Exception as e:
+            logger.error(f"차트 요청 처리 중 오류 발생: {e}")
+            QMessageBox.warning(self, "오류", f"차트 표시 중 오류가 발생했습니다: {e}")
+    
     def show_panel(self, panel_name):
         """패널 표시"""
         if panel_name in self.panels:
@@ -513,15 +692,17 @@ class MainWindow(QMainWindow):
                 # 차트 패널 생성
                 dock = self.add_chart_panel()
                 dock.show()
+            elif panel_name == "favorites":
+                # 관심종목 패널 생성
+                dock = self.add_favorites_panel()
+                dock.show()
             elif panel_name == "current_price":
-                # 현재가 패널 생성 (임시)
-                self.create_empty_panel(panel_name, "현재가", Qt.RightDockWidgetArea)
+                # 현재가 패널 생성
+                dock = self.add_current_price_panel()
+                dock.show()
             elif panel_name == "holdings":
                 # 보유종목 패널 생성 (임시)
                 self.create_empty_panel(panel_name, "보유종목", Qt.LeftDockWidgetArea)
-            elif panel_name == "favorites":
-                # 관심종목 패널 생성 (임시)
-                self.create_empty_panel(panel_name, "관심종목", Qt.LeftDockWidgetArea)
             elif panel_name == "account":
                 # 계좌 패널 생성 (임시)
                 self.create_empty_panel(panel_name, "계좌", Qt.LeftDockWidgetArea)
@@ -645,51 +826,89 @@ class MainWindow(QMainWindow):
     
     def load_dashboard(self, name):
         """대시보드 로드"""
-        self.current_dashboard = name
-        
-        # 먼저 모든 패널 숨기기
-        for panel in self.panels.values():
-            panel.hide()
-        
-        # 대시보드 설정 로드
-        dashboard_state = self.settings.value(f"dashboards/{name}/state")
-        if dashboard_state:
-            self.restoreState(dashboard_state)
-        
-        # 대시보드 패널 표시 상태 로드
-        panels_state = self.settings.value(f"dashboards/{name}/panels", {})
-        for panel_name, visible in panels_state.items():
-            if panel_name in self.panels and visible:
-                self.panels[panel_name].show()
-        
-        # 열린 패널 목록 업데이트
-        self.update_open_panels()
+        try:
+            self.current_dashboard = name
+            
+            # 먼저 모든 패널 숨기기
+            for panel in self.panels.values():
+                if panel:
+                    panel.hide()
+            
+            # 대시보드 패널 상태 로드
+            panels_state = self.settings.value(f"dashboards/{name}/panels", {})
+            
+            for panel_name, state in panels_state.items():
+                if panel_name not in self.panels or not self.panels[panel_name]:
+                    # 패널이 없으면 생성
+                    if panel_name == "chart":
+                        self.add_chart_panel()
+                    elif panel_name == "favorites":
+                        self.add_favorites_panel()
+                    elif panel_name == "current_price":
+                        self.add_current_price_panel()
+                
+                if panel_name in self.panels and self.panels[panel_name]:
+                    panel = self.panels[panel_name]
+                    if state.get('visible', False):
+                        panel.show()
+                        if 'geometry' in state:
+                            panel.setGeometry(*state['geometry'])
+                        if 'floating' in state:
+                            panel.setFloating(state['floating'])
+                        if 'area' in state:
+                            self.addDockWidget(Qt.DockWidgetArea(state['area']), panel)
+            
+            # 대시보드 상태 복원
+            dashboard_state = self.settings.value(f"dashboards/{name}/state")
+            if dashboard_state:
+                self.restoreState(dashboard_state)
+            
+            # 열린 패널 목록 업데이트
+            self.update_open_panels()
+            
+            logger.info(f"대시보드 '{name}' 로드 완료")
+            
+        except Exception as e:
+            logger.error(f"대시보드 로드 중 오류 발생: {e}")
+            QMessageBox.warning(self, "오류", f"대시보드 로드 중 오류가 발생했습니다: {e}")
     
     def save_dashboard(self, name):
         """대시보드 저장"""
-        # 대시보드 목록 업데이트
-        dashboard_list = self.settings.value("dashboards/list", [])
-        if name not in dashboard_list:
-            dashboard_list.append(name)
-            self.settings.setValue("dashboards/list", dashboard_list)
-            self.dashboard_combo.addItem(name)
-        
-        # 현재 상태 저장
-        self.settings.setValue(f"dashboards/{name}/state", self.saveState())
-        
-        # 패널 표시 상태 저장 (열려있는 패널만)
-        panels_state = {}
-        for panel_name, panel in self.panels.items():
-            # 열려있는 패널만 True로 저장
-            panels_state[panel_name] = panel.isVisible()
-        
-        self.settings.setValue(f"dashboards/{name}/panels", panels_state)
-        
-        # 마지막 사용 대시보드 저장
-        self.settings.setValue("dashboards/last", name)
-        
-        # 메시지 표시
-        self.statusBar().showMessage(f"대시보드 '{name}' 저장 완료")
+        try:
+            # 대시보드 목록 업데이트
+            dashboard_list = self.settings.value("dashboards/list", [])
+            if name not in dashboard_list:
+                dashboard_list.append(name)
+                self.settings.setValue("dashboards/list", dashboard_list)
+                self.dashboard_combo.addItem(name)
+            
+            # 현재 상태 저장
+            self.settings.setValue(f"dashboards/{name}/state", self.saveState())
+            
+            # 패널 표시 상태 저장
+            panels_state = {}
+            for panel_name, panel in self.panels.items():
+                if panel:
+                    # 패널의 표시 상태와 위치 저장
+                    panels_state[panel_name] = {
+                        'visible': panel.isVisible(),
+                        'geometry': panel.geometry().getRect(),
+                        'floating': panel.isFloating(),
+                        'area': int(self.dockWidgetArea(panel))
+                    }
+            
+            self.settings.setValue(f"dashboards/{name}/panels", panels_state)
+            
+            # 마지막 사용 대시보드 저장
+            self.settings.setValue("dashboards/last", name)
+            
+            # 메시지 표시
+            self.statusBar().showMessage(f"대시보드 '{name}' 저장 완료")
+            logger.info(f"대시보드 '{name}' 저장 완료")
+            
+        except Exception as e:
+            logger.error(f"대시보드 저장 중 오류 발생: {e}")
+            QMessageBox.warning(self, "오류", f"대시보드 저장 중 오류가 발생했습니다: {e}")
     
     def save_current_dashboard(self):
         """현재 대시보드 저장"""
@@ -705,8 +924,55 @@ class MainWindow(QMainWindow):
     
     def manage_dashboards(self):
         """대시보드 관리"""
-        # 대시보드 관리 다이얼로그 표시 (미구현)
-        QMessageBox.information(self, "알림", "대시보드 관리 기능은 아직 구현되지 않았습니다.")
+        try:
+            # 현재 저장된 대시보드 목록 가져오기
+            dashboard_list = self.settings.value("dashboards/list", [])
+            
+            # 대시보드 선택 다이얼로그 표시
+            dashboard, ok = QInputDialog.getItem(
+                self, "대시보드 관리",
+                "삭제할 대시보드 선택:",
+                dashboard_list, 0, False
+            )
+            
+            if ok and dashboard:
+                # 기본 대시보드는 삭제 불가
+                if dashboard == "기본 대시보드":
+                    QMessageBox.warning(self, "경고", "기본 대시보드는 삭제할 수 없습니다.")
+                    return
+                
+                # 삭제 확인
+                reply = QMessageBox.question(
+                    self, "대시보드 삭제",
+                    f"'{dashboard}' 대시보드를 삭제하시겠습니까?",
+                    QMessageBox.Yes | QMessageBox.No,
+                    QMessageBox.No
+                )
+                
+                if reply == QMessageBox.Yes:
+                    # 대시보드 목록에서 제거
+                    dashboard_list.remove(dashboard)
+                    self.settings.setValue("dashboards/list", dashboard_list)
+                    
+                    # 대시보드 설정 삭제
+                    self.settings.remove(f"dashboards/{dashboard}")
+                    
+                    # 콤보박스 업데이트
+                    self.dashboard_combo.clear()
+                    self.dashboard_combo.addItems(dashboard_list)
+                    
+                    # 현재 대시보드가 삭제된 경우 기본 대시보드로 변경
+                    if dashboard == self.current_dashboard:
+                        self.current_dashboard = "기본 대시보드"
+                        self.dashboard_combo.setCurrentText("기본 대시보드")
+                        self.load_dashboard("기본 대시보드")
+                    
+                    self.statusBar().showMessage(f"대시보드 '{dashboard}' 삭제 완료")
+                    logger.info(f"대시보드 '{dashboard}' 삭제 완료")
+            
+        except Exception as e:
+            logger.error(f"대시보드 관리 중 오류 발생: {e}")
+            QMessageBox.warning(self, "오류", f"대시보드 관리 중 오류가 발생했습니다: {e}")
     
     def on_dashboard_changed(self, name):
         """대시보드 변경 이벤트"""
@@ -735,21 +1001,20 @@ class MainWindow(QMainWindow):
             logger.error(f"로그인 상태 확인 중 오류 발생: {e}")
     
     def closeEvent(self, event):
-        """
-        윈도우 종료 이벤트
-        
-        Args:
-            event: 이벤트 객체
-        """
-        # 현재 대시보드 저장
-        self.save_current_dashboard()
-        
-        # 윈도우 상태 저장
-        self.settings.setValue('window/geometry', self.saveGeometry())
-        self.settings.setValue('window/state', self.saveState())
-        
-        # 이벤트 수락
-        event.accept()
+        """프로그램 종료 시 처리"""
+        try:
+            # 현재 대시보드 저장
+            self.save_current_dashboard()
+            
+            # 윈도우 상태 저장
+            self.settings.setValue('window/geometry', self.saveGeometry())
+            self.settings.setValue('window/state', self.saveState())
+            
+            event.accept()
+            
+        except Exception as e:
+            logger.error(f"프로그램 종료 중 오류 발생: {e}")
+            event.accept()
 
     def show_settings_dialog(self):
         """설정 다이얼로그 표시"""
@@ -797,4 +1062,91 @@ class MainWindow(QMainWindow):
         panel_name = self.open_panels_combo.currentText()
         if panel_name in self.panels:
             self.panels[panel_name].hide()
-            self.update_open_panels() 
+            self.update_open_panels()
+
+    def save_dashboard_settings(self):
+        """대시보드 설정 저장"""
+        try:
+            settings = {}
+            
+            # 차트 패널 설정 저장
+            if self.panels["chart"]:
+                settings['chart'] = {
+                    'visible': self.panels["chart"].isVisible(),
+                    'geometry': self.panels["chart"].geometry().getRect()
+                }
+            
+            # 관심종목 패널 설정 저장
+            if self.panels["favorites"]:
+                settings['favorites'] = {
+                    'visible': self.panels["favorites"].isVisible(),
+                    'geometry': self.panels["favorites"].geometry().getRect()
+                }
+            
+            # 설정 파일 저장
+            with open('data/dashboard_settings.json', 'w', encoding='utf-8') as f:
+                json.dump(settings, f, ensure_ascii=False, indent=2)
+            
+            logger.info("대시보드 설정 저장 완료")
+            
+        except Exception as e:
+            logger.error(f"대시보드 설정 저장 중 오류 발생: {e}")
+
+    def load_dashboard_settings(self):
+        """대시보드 설정 불러오기"""
+        try:
+            if not os.path.exists('data/dashboard_settings.json'):
+                return
+            
+            with open('data/dashboard_settings.json', 'r', encoding='utf-8') as f:
+                settings = json.load(f)
+            
+            # 차트 패널 설정 복원
+            if 'chart' in settings and self.panels["chart"]:
+                chart_settings = settings['chart']
+                if chart_settings['visible']:
+                    self.panels["chart"].show()
+                    self.panels["chart"].setGeometry(*chart_settings['geometry'])
+                else:
+                    self.panels["chart"].hide()
+            
+            # 관심종목 패널 설정 복원
+            if 'favorites' in settings and self.panels["favorites"]:
+                favorites_settings = settings['favorites']
+                if favorites_settings['visible']:
+                    self.show_favorites_panel()  # 패널이 없으면 생성
+                    self.panels["favorites"].setGeometry(*favorites_settings['geometry'])
+                else:
+                    if self.panels["favorites"]:
+                        self.panels["favorites"].hide()
+            
+            logger.info("대시보드 설정 불러오기 완료")
+            
+        except Exception as e:
+            logger.error(f"대시보드 설정 불러오기 중 오류 발생: {e}")
+
+    def show_favorites_panel(self):
+        """관심종목 패널 표시"""
+        if not self.panels["favorites"]:
+            self.add_favorites_panel()
+        self.panels["favorites"].show()
+
+    def create_default_panels(self):
+        """기본 패널 생성"""
+        try:
+            # 차트 패널 생성
+            chart_dock = self.add_chart_panel()
+            chart_dock.hide()  # 초기에는 숨김
+            
+            # 관심종목 패널 생성
+            favorites_dock = self.add_favorites_panel()
+            favorites_dock.hide()  # 초기에는 숨김
+            
+            # 현재가 패널 생성
+            current_price_dock = self.add_current_price_panel()
+            current_price_dock.hide()  # 초기에는 숨김
+            
+            logger.info("기본 패널 생성 완료")
+            
+        except Exception as e:
+            logger.error(f"기본 패널 생성 중 오류 발생: {e}") 
