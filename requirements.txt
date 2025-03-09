@@ -1,0 +1,28 @@
+PyQt5>=5.15.0
+pywin32>=300
+numpy>=1.19.0
+pandas>=1.1.0
+python-dotenv>=0.15.0
+requests==2.31.0
+matplotlib>=3.3.0
+python-dateutil==2.8.2
+pytz==2023.3
+mplfinance>=0.12.7a0
+cryptography==41.0.3
+
+# 차트 관련 패키지
+plotly>=4.14.0
+seaborn>=0.11.0
+
+# AI 관련 패키지
+scikit-learn>=0.24.0
+joblib>=1.0.0
+tensorflow>=2.4.0
+keras>=2.4.0
+
+# 데이터 처리 관련 패키지
+ta>=0.7.0  # 기술적 지표 계산 라이브러리
+tqdm>=4.50.0  # 진행 상황 표시 라이브러리
+
+# 로깅 및 유틸리티
+colorlog>=4.7.0 
